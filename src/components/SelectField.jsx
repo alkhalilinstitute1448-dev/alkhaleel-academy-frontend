@@ -40,10 +40,8 @@ export default function SelectField({
   }, []);
 
   function handleSelect(opt) {
-    const synthetic = { target: { value: opt.value, name } };
-    onChange(synthetic);
+    onChange({ target: { value: opt.value, name } });
     setIsOpen(false);
-    if (onBlur) setTimeout(() => onBlur(synthetic), 0);
   }
 
   return (

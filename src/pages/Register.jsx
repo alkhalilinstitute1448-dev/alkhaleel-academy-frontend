@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { isValidPhoneNumber } from 'libphonenumber-js';
 import api from '../api';
@@ -32,6 +32,11 @@ function CameraCapture({ onCapture, onClose }) {
   const streamRef = useRef(null);
   const [facing, setFacing] = useState('user');
   const [captured, setCaptured] = useState(null);
+
+  useEffect(() => {
+    startCamera(facing);
+    return () => stopCamera();
+  }, []);
 
   function startCamera(f) {
     stopCamera();
@@ -393,8 +398,8 @@ export default function Register() {
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="label-text">الاسم الكامل <span className="text-red-400">*</span></label>
-                    <input type="text" name="fullName" value={form.fullName} onChange={(e) => { setFormValue('fullName', e.target.value); if (touched.fullName) validateField('fullName', e.target.value); }} onBlur={() => handleBlur('fullName')} className={`input-field ${touched.fullName && errors.fullName ? '!border-red-500/50 !ring-red-500/10' : ''}`} placeholder="الاسم الرباعي" />
+                    <label className="label-text">الاسم والكنية <span className="text-red-400">*</span></label>
+                    <input type="text" name="fullName" value={form.fullName} onChange={(e) => { setFormValue('fullName', e.target.value); if (touched.fullName) validateField('fullName', e.target.value); }} onBlur={() => handleBlur('fullName')} className={`input-field ${touched.fullName && errors.fullName ? '!border-red-500/50 !ring-red-500/10' : ''}`} placeholder="الاسم والكنية" />
                     {touched.fullName && errors.fullName && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.fullName}</p>}
                   </div>
                   <div>
@@ -412,8 +417,7 @@ export default function Register() {
                     <SelectField
                       value={form.birthYear}
                       placeholder="اختر السنة"
-                      onChange={(e) => { setFormValue('birthYear', e.target.value); if (touched.birthYear) validateField('birthYear', e.target.value); }}
-                      onBlur={() => handleBlur('birthYear')}
+                      onChange={(e) => { const v = e.target.value; setFormValue('birthYear', v); setTouched(p => ({...p, birthYear: true})); validateField('birthYear', v); }}
                       name="birthYear"
                       error={touched.birthYear && errors.birthYear}
                       options={birthYears.map((y) => ({ value: String(y), label: String(y) }))}
@@ -436,8 +440,7 @@ export default function Register() {
                     <SelectField
                       value={form.fatherStatus}
                       placeholder="-- اختر --"
-                      onChange={(e) => { setFormValue('fatherStatus', e.target.value); if (touched.fatherStatus) validateField('fatherStatus', e.target.value); }}
-                      onBlur={() => handleBlur('fatherStatus')}
+                      onChange={(e) => { const v = e.target.value; setFormValue('fatherStatus', v); setTouched(p => ({...p, fatherStatus: true})); validateField('fatherStatus', v); }}
                       name="fatherStatus"
                       error={touched.fatherStatus && errors.fatherStatus}
                       options={STATUS_OPTIONS.filter((o) => o.value).map((o) => ({ value: o.value, label: o.label }))}
@@ -449,8 +452,7 @@ export default function Register() {
                     <SelectField
                       value={form.motherStatus}
                       placeholder="-- اختر --"
-                      onChange={(e) => { setFormValue('motherStatus', e.target.value); if (touched.motherStatus) validateField('motherStatus', e.target.value); }}
-                      onBlur={() => handleBlur('motherStatus')}
+                      onChange={(e) => { const v = e.target.value; setFormValue('motherStatus', v); setTouched(p => ({...p, motherStatus: true})); validateField('motherStatus', v); }}
                       name="motherStatus"
                       error={touched.motherStatus && errors.motherStatus}
                       options={STATUS_OPTIONS.filter((o) => o.value).map((o) => ({ value: o.value, label: o.label }))}
@@ -478,9 +480,9 @@ export default function Register() {
                   معلومات التواصل
                 </h3>
                 <div className="space-y-4">
-                  <CountryPhoneRow label="رقم الطالب" required={false} country={form.studentCountry} digits={form.studentPhone} onCountryChange={(v) => setFormValue('studentCountry', v)} onDigitsChange={(v) => { setFormValue('studentPhone', v); if (touched.studentPhone) validateField('studentPhone', v); }} error={touched.studentPhone ? errors.studentPhone : ''} showOptional />
-                  <CountryPhoneRow label="رقم الأب" required country={form.fatherCountry} digits={form.fatherPhone} onCountryChange={(v) => setFormValue('fatherCountry', v)} onDigitsChange={(v) => { setFormValue('fatherPhone', v); if (touched.fatherPhone) validateField('fatherPhone', v); }} error={touched.fatherPhone ? errors.fatherPhone : ''} />
-                  <CountryPhoneRow label="رقم الأم" required country={form.motherCountry} digits={form.motherPhone} onCountryChange={(v) => setFormValue('motherCountry', v)} onDigitsChange={(v) => { setFormValue('motherPhone', v); if (touched.motherPhone) validateField('motherPhone', v); }} error={touched.motherPhone ? errors.motherPhone : ''} />
+                  <CountryPhoneRow label="رقم الطالب" required={false} country={form.studentCountry} digits={form.studentPhone} onCountryChange={(v) => setFormValue('studentCountry', v)} onDigitsChange={(v) => { setFormValue('studentPhone', v); setTouched(p => ({...p, studentPhone: true})); validateField('studentPhone', v); }} error={touched.studentPhone ? errors.studentPhone : ''} showOptional />
+                  <CountryPhoneRow label="رقم الأب" required country={form.fatherCountry} digits={form.fatherPhone} onCountryChange={(v) => setFormValue('fatherCountry', v)} onDigitsChange={(v) => { setFormValue('fatherPhone', v); setTouched(p => ({...p, fatherPhone: true})); validateField('fatherPhone', v); }} error={touched.fatherPhone ? errors.fatherPhone : ''} />
+                  <CountryPhoneRow label="رقم الأم" required country={form.motherCountry} digits={form.motherPhone} onCountryChange={(v) => setFormValue('motherCountry', v)} onDigitsChange={(v) => { setFormValue('motherPhone', v); setTouched(p => ({...p, motherPhone: true})); validateField('motherPhone', v); }} error={touched.motherPhone ? errors.motherPhone : ''} />
                   {errors._phone && <p className="text-red-400 text-xs pr-1">{errors._phone}</p>}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -501,8 +503,7 @@ export default function Register() {
                       <SelectField
                         value={form.stage}
                         placeholder="اختر المرحلة"
-                        onChange={(e) => { setFormValue('stage', e.target.value); if (touched.stage) validateField('stage', e.target.value); }}
-                        onBlur={() => handleBlur('stage')}
+                        onChange={(e) => { const v = e.target.value; setFormValue('stage', v); setTouched(p => ({...p, stage: true})); validateField('stage', v); }}
                         name="stage"
                         error={touched.stage && errors.stage}
                         options={STAGES.map((s) => ({ value: s, label: s }))}
