@@ -21,8 +21,6 @@ const initialForm = {
 const STABILITY_SECONDS = 5;
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights';
 
-const OVERLAY_ZONE = { left: 0.30, right: 0.70, top: 0.05, bottom: 0.55 };
-
 const FACE_STATES = { LOADING: 'loading', SEARCHING: 'searching', LOCKED: 'locked' };
 
 function CameraCapture({ onCapture, onClose }) {
@@ -109,40 +107,17 @@ function CameraCapture({ onCapture, onClose }) {
           const vh = videoRef.current.videoHeight;
           if (!vw || !vh) { animFrameRef.current = requestAnimationFrame(tick); return; }
 
-          /* centre within overlay zone */
+          /* Eyes / nose / mouth — if face-api returned landmarks, they exist */
+          const hasEyes = lm.getLeftEye().length > 0 && lm.getRightEye().length > 0;
+          const hasNose = lm.getNose().length > 0;
+          const hasMouth = lm.getMouth().length > 0;
+
+          /* Roughly centred (loose 90 % frame bounds) */
           const cxN = (box.x + box.width / 2) / vw;
           const cyN = (box.y + box.height / 2) / vh;
-          const inBounds =
-            cxN > OVERLAY_ZONE.left && cxN < OVERLAY_ZONE.right &&
-            cyN > OVERLAY_ZONE.top && cyN < OVERLAY_ZONE.bottom;
+          const roughlyCentred = cxN > 0.05 && cxN < 0.95 && cyN > 0.05 && cyN < 0.95;
 
-          /* proportional size */
-          const faceRatio = (box.width * box.height) / (vw * vh);
-          const goodSize = faceRatio > 0.08 && box.width / vw < 0.35 && box.height / vh < 0.50;
-
-          /* extract feature groups */
-          const leftEye = lm.getLeftEye();
-          const rightEye = lm.getRightEye();
-          const nose = lm.getNose();
-          const mouth = lm.getMouth();
-          const hasEyes = leftEye.length > 0 && rightEye.length > 0;
-          const hasNose = nose.length > 0;
-          const hasMouth = mouth.length > 0;
-
-          /* anatomical vertical ordering: eyes → nose → mouth */
-          const avgY = (pts) => pts.reduce((s, p) => s + p.y, 0) / pts.length;
-          const eyeY = (avgY(leftEye) + avgY(rightEye)) / 2;
-          const noseY = avgY(nose);
-          const mouthY = avgY(mouth);
-          const correctOrder = eyeY < noseY && noseY < mouthY;
-
-          /* inter-ocular distance check */
-          const lx = leftEye.reduce((s, p) => s + p.x, 0) / leftEye.length;
-          const rx = rightEye.reduce((s, p) => s + p.x, 0) / rightEye.length;
-          const eyeSpan = Math.abs(lx - rx) / box.width;
-          const goodSpacing = eyeSpan > 0.32 && eyeSpan < 0.62;
-
-          if (inBounds && goodSize && hasEyes && hasNose && hasMouth && correctOrder && goodSpacing) {
+          if (hasEyes && hasNose && hasMouth && roughlyCentred) {
             setFaceState(FACE_STATES.LOCKED);
           } else {
             setFaceState(FACE_STATES.SEARCHING);
