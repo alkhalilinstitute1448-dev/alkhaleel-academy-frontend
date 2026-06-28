@@ -10,21 +10,11 @@ const STAGES = [
   'العاشر', 'الحادي عشر', 'الثانوية', 'جامعي', 'متخرج', 'لا يدرس',
 ];
 
-const STATUS_OPTIONS = [
-  { value: '', label: '-- اختر --' },
-  { value: 'على قيد الحياة', label: 'على قيد الحياة' },
-  { value: 'متوفى', label: 'متوفى' },
-  { value: 'غير ذلك', label: 'غير ذلك' },
-];
-
 const initialForm = {
   fullName: '', fatherName: '', motherName: '',
-  fatherStatus: '', motherStatus: '',
-  fatherOccupation: '', motherOccupation: '',
-  studentCountry: 'SY', fatherCountry: 'SY', motherCountry: 'SY',
-  studentPhone: '', fatherPhone: '', motherPhone: '',
-  primaryContact: 'father',
   birthYear: '', stage: '',
+  studentCountry: 'SY', studentPhone: '',
+  currentJob: '', nationality: '',
 };
 
 const STABILITY_SECONDS = 5;
@@ -550,28 +540,12 @@ export default function Register() {
         else if (v.trim().length < 3) errs[name] = 'يجب أن يكون على الأقل 3 أحرف';
         else delete errs[name];
         break;
-      case 'fatherStatus':
-      case 'motherStatus':
-        if (!v) errs[name] = 'يرجى اختيار الحالة';
-        else delete errs[name];
-        break;
-      case 'fatherOccupation':
-      case 'motherOccupation':
-        if (!v || !v.trim()) errs[name] = 'هذا الحقل مطلوب';
-        else delete errs[name];
-        break;
-      case 'fatherPhone':
-      case 'motherPhone':
       case 'studentPhone': {
-        if (name === 'studentPhone' && (!v || !v.trim())) {
-          delete errs[name];
-          break;
-        }
         if (!v || !v.trim()) {
           errs[name] = 'هذا الحقل مطلوب';
           break;
         }
-        const cCode = form[name === 'fatherPhone' ? 'fatherCountry' : name === 'motherPhone' ? 'motherCountry' : 'studentCountry'];
+        const cCode = form.studentCountry;
         const selected = COUNTRIES.find((c) => c.code === cCode) || COUNTRIES[0];
         const normalized = normalizePhone(v);
         if (!normalized) {
@@ -603,6 +577,14 @@ export default function Register() {
         if (!v) errs[name] = 'يرجى اختيار المرحلة';
         else delete errs[name];
         break;
+      case 'currentJob':
+        if (!v || !v.trim()) errs[name] = 'هذا الحقل مطلوب';
+        else delete errs[name];
+        break;
+      case 'nationality':
+        if (!v) errs[name] = 'يرجى اختيار الجنسية';
+        else delete errs[name];
+        break;
       default:
         delete errs[name];
     }
@@ -612,23 +594,12 @@ export default function Register() {
   }
 
   function validateAll() {
-    const fields = ['fullName', 'fatherName', 'motherName', 'fatherStatus', 'motherStatus',
-      'fatherOccupation', 'motherOccupation', 'fatherPhone', 'motherPhone', 'birthYear', 'stage'];
+    const fields = ['fullName', 'fatherName', 'motherName', 'birthYear', 'stage', 'currentJob', 'nationality', 'studentPhone'];
     let valid = true;
     const newTouched = {};
     fields.forEach((f) => { newTouched[f] = true; });
     setTouched(newTouched);
     fields.forEach((f) => { if (!validateField(f)) valid = false; });
-
-    const fatherP = form.fatherPhone;
-    const motherP = form.motherPhone;
-    const studentP = form.studentPhone;
-    if ((!fatherP || !fatherP.trim()) && (!motherP || !motherP.trim()) && (!studentP || !studentP.trim())) {
-      setErrors((prev) => ({ ...prev, _phone: 'يجب إدخال رقم تواصل واحد على الأقل (الأب، الأم، أو الطالب)' }));
-      valid = false;
-    } else {
-      setErrors((prev) => { const { _phone, ...rest } = prev; return rest; });
-    }
 
     if (!photo) {
       setErrors((prev) => ({ ...prev, photo: 'يرجى التقاط صورة للطالب' }));
@@ -652,10 +623,8 @@ export default function Register() {
     try {
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => {
-        if (k === 'studentCountry' || k === 'fatherCountry' || k === 'motherCountry') return;
+        if (k === 'studentCountry') return;
         if (k === 'studentPhone') fd.append(k, buildFullPhone(form.studentCountry, v));
-        else if (k === 'fatherPhone') fd.append(k, buildFullPhone(form.fatherCountry, v));
-        else if (k === 'motherPhone') fd.append(k, buildFullPhone(form.motherCountry, v));
         else fd.append(k, v);
       });
       if (photo) fd.append('photo', photo);
@@ -788,44 +757,43 @@ export default function Register() {
               <div className="border-t border-gold-500/10 pt-5">
                 <h3 className="text-sm font-bold text-gold-400 mb-4 flex items-center gap-2">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 14l9-5-9-5-9 5 9 5z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 14v7" />
                   </svg>
-                  معلومات والدي الطالب
+                  معلومات الطالب
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="label-text">حالة الأب <span className="text-red-400">*</span></label>
+                    <label className="label-text">الحالة الدراسية / الشهادات العلمية <span className="text-red-400">*</span></label>
                     <SelectField
-                      value={form.fatherStatus}
-                      placeholder="-- اختر --"
-                      onChange={(e) => { const v = e.target.value; setFormValue('fatherStatus', v); setTouched(p => ({...p, fatherStatus: true})); validateField('fatherStatus', v); }}
-                      name="fatherStatus"
-                      error={touched.fatherStatus && errors.fatherStatus}
-                      options={STATUS_OPTIONS.filter((o) => o.value).map((o) => ({ value: o.value, label: o.label }))}
+                      value={form.stage}
+                      placeholder="اختر المرحلة"
+                      onChange={(e) => { const v = e.target.value; setFormValue('stage', v); setTouched(p => ({...p, stage: true})); validateField('stage', v); }}
+                      name="stage"
+                      error={touched.stage && errors.stage}
+                      options={STAGES.map((s) => ({ value: s, label: s }))}
                     />
-                    {touched.fatherStatus && errors.fatherStatus && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.fatherStatus}</p>}
+                    {touched.stage && errors.stage && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.stage}</p>}
                   </div>
                   <div>
-                    <label className="label-text">حالة الأم <span className="text-red-400">*</span></label>
+                    <label className="label-text">العمل الحالي <span className="text-red-400">*</span></label>
+                    <input type="text" name="currentJob" value={form.currentJob} placeholder="مثال: محاسب، طالب، مهندس..." onChange={(e) => { setFormValue('currentJob', e.target.value); if (touched.currentJob) validateField('currentJob', e.target.value); }} onBlur={() => handleBlur('currentJob')} className={`input-field ${touched.currentJob && errors.currentJob ? '!border-red-500/50 !ring-red-500/10' : ''}`} />
+                    {touched.currentJob && errors.currentJob && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.currentJob}</p>}
+                  </div>
+                  <div>
+                    <label className="label-text">الجنسية <span className="text-red-400">*</span></label>
                     <SelectField
-                      value={form.motherStatus}
-                      placeholder="-- اختر --"
-                      onChange={(e) => { const v = e.target.value; setFormValue('motherStatus', v); setTouched(p => ({...p, motherStatus: true})); validateField('motherStatus', v); }}
-                      name="motherStatus"
-                      error={touched.motherStatus && errors.motherStatus}
-                      options={STATUS_OPTIONS.filter((o) => o.value).map((o) => ({ value: o.value, label: o.label }))}
+                      value={form.nationality}
+                      placeholder="اختر الجنسية"
+                      onChange={(e) => { const v = e.target.value; setFormValue('nationality', v); setTouched(p => ({...p, nationality: true})); validateField('nationality', v); }}
+                      name="nationality"
+                      error={touched.nationality && errors.nationality}
+                      options={[
+                        { value: 'سوري', label: 'سوري' },
+                        { value: 'خارج سوريا', label: 'خارج سوريا' },
+                      ]}
                     />
-                    {touched.motherStatus && errors.motherStatus && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.motherStatus}</p>}
-                  </div>
-                  <div>
-                    <label className="label-text">مهنة الأب <span className="text-red-400">*</span></label>
-                    <input type="text" name="fatherOccupation" value={form.fatherOccupation} onChange={(e) => { setFormValue('fatherOccupation', e.target.value); if (touched.fatherOccupation) validateField('fatherOccupation', e.target.value); }} onBlur={() => handleBlur('fatherOccupation')} className={`input-field ${touched.fatherOccupation && errors.fatherOccupation ? '!border-red-500/50 !ring-red-500/10' : ''}`} />
-                    {touched.fatherOccupation && errors.fatherOccupation && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.fatherOccupation}</p>}
-                  </div>
-                  <div>
-                    <label className="label-text">مهنة الأم <span className="text-red-400">*</span></label>
-                    <input type="text" name="motherOccupation" value={form.motherOccupation} onChange={(e) => { setFormValue('motherOccupation', e.target.value); if (touched.motherOccupation) validateField('motherOccupation', e.target.value); }} onBlur={() => handleBlur('motherOccupation')} className={`input-field ${touched.motherOccupation && errors.motherOccupation ? '!border-red-500/50 !ring-red-500/10' : ''}`} />
-                    {touched.motherOccupation && errors.motherOccupation && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.motherOccupation}</p>}
+                    {touched.nationality && errors.nationality && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.nationality}</p>}
                   </div>
                 </div>
               </div>
@@ -837,38 +805,8 @@ export default function Register() {
                   </svg>
                   معلومات التواصل
                 </h3>
-                <div className="space-y-4">
-                  <CountryPhoneRow label="رقم الطالب" required={false} country={form.studentCountry} digits={form.studentPhone} onCountryChange={(v) => setFormValue('studentCountry', v)} onDigitsChange={(v) => { setFormValue('studentPhone', v); setTouched(p => ({...p, studentPhone: true})); validateField('studentPhone', v); }} error={touched.studentPhone ? errors.studentPhone : ''} showOptional />
-                  <CountryPhoneRow label="رقم الأب" required country={form.fatherCountry} digits={form.fatherPhone} onCountryChange={(v) => setFormValue('fatherCountry', v)} onDigitsChange={(v) => { setFormValue('fatherPhone', v); setTouched(p => ({...p, fatherPhone: true})); validateField('fatherPhone', v); }} error={touched.fatherPhone ? errors.fatherPhone : ''} />
-                  <CountryPhoneRow label="رقم الأم" required country={form.motherCountry} digits={form.motherPhone} onCountryChange={(v) => setFormValue('motherCountry', v)} onDigitsChange={(v) => { setFormValue('motherPhone', v); setTouched(p => ({...p, motherPhone: true})); validateField('motherPhone', v); }} error={touched.motherPhone ? errors.motherPhone : ''} />
-                  {errors._phone && <p className="text-red-400 text-xs pr-1">{errors._phone}</p>}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="label-text">رقم التواصل عبر واتساب <span className="text-red-400">*</span></label>
-                      <SelectField
-                        value={form.primaryContact}
-                        onChange={(e) => setFormValue('primaryContact', e.target.value)}
-                        name="primaryContact"
-                        options={[
-                          { value: 'father', label: 'رقم الأب' },
-                          { value: 'mother', label: 'رقم الأم' },
-                          { value: 'student', label: 'رقم الطالب' },
-                        ]}
-                      />
-                    </div>
-                    <div>
-                      <label className="label-text">المرحلة الدراسية <span className="text-red-400">*</span></label>
-                      <SelectField
-                        value={form.stage}
-                        placeholder="اختر المرحلة"
-                        onChange={(e) => { const v = e.target.value; setFormValue('stage', v); setTouched(p => ({...p, stage: true})); validateField('stage', v); }}
-                        name="stage"
-                        error={touched.stage && errors.stage}
-                        options={STAGES.map((s) => ({ value: s, label: s }))}
-                      />
-                      {touched.stage && errors.stage && <p className="text-red-400 text-xs mt-1.5 pr-1">{errors.stage}</p>}
-                    </div>
-                  </div>
+                <div>
+                  <CountryPhoneRow label="رقم التواصل (الطالب)" required country={form.studentCountry} digits={form.studentPhone} onCountryChange={(v) => setFormValue('studentCountry', v)} onDigitsChange={(v) => { setFormValue('studentPhone', v); setTouched(p => ({...p, studentPhone: true})); validateField('studentPhone', v); }} error={touched.studentPhone ? errors.studentPhone : ''} />
                 </div>
               </div>
 
