@@ -32,34 +32,19 @@ function CameraCapture({ onCapture, onClose }) {
   const [facing, setFacing] = useState('user');
   const [captured, setCaptured] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [modelsReady, setModelsReady] = useState(false);
+  const [modelsAvailable, setModelsAvailable] = useState(false);
   const [faceState, setFaceState] = useState(FACE_STATES.LOADING);
   const [stabilityTime, setStabilityTime] = useState(0);
   const isStable = stabilityTime >= STABILITY_SECONDS;
 
-  /* ---------- Load face-api models ---------- */
+  /* ---------- Camera lifecycle — start FIRST ---------- */
   useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-    ]).then(() => {
-      if (!cancelled) { setModelsReady(true); setFaceState(FACE_STATES.SEARCHING); }
-    }).catch(() => {
-      if (!cancelled) setFaceState(FACE_STATES.SEARCHING);
-    });
-    return () => { cancelled = true; };
-  }, []);
-
-  /* ---------- Camera lifecycle ---------- */
-  useEffect(() => {
-    if (!modelsReady) return;
     setCameraReady(false);
     setStabilityTime(0);
-    setFaceState(FACE_STATES.SEARCHING);
+    setFaceState(FACE_STATES.LOADING);
     startCamera(facing);
     return () => stopCamera();
-  }, [facing, modelsReady]);
+  }, [facing]);
 
   function startCamera(f) {
     stopCamera();
@@ -69,8 +54,11 @@ function CameraCapture({ onCapture, onClose }) {
         streamRef.current = s;
         if (videoRef.current) videoRef.current.srcObject = s;
         setCameraReady(true);
+        setFaceState(FACE_STATES.SEARCHING);
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error('Camera error:', err);
+      });
   }
 
   function stopCamera() {
@@ -80,9 +68,24 @@ function CameraCapture({ onCapture, onClose }) {
     }
   }
 
+  /* ---------- Load face-api models (parallel — don't block camera) ---------- */
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+    ])
+      .then(() => { if (!cancelled) setModelsAvailable(true); })
+      .catch((err) => {
+        console.error('Face-api model load error:', err);
+        if (!cancelled) setModelsAvailable(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   /* ---------- face-api.js detection loop ---------- */
   useEffect(() => {
-    if (!cameraReady || captured) return;
+    if (!cameraReady || !modelsAvailable || captured) return;
 
     let active = true;
     const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
@@ -155,7 +158,7 @@ function CameraCapture({ onCapture, onClose }) {
 
     animFrameRef.current = requestAnimationFrame(tick);
     return () => { active = false; if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
-  }, [cameraReady, captured]);
+  }, [cameraReady, modelsAvailable, captured]);
 
   /* ---------- Stability countdown ---------- */
   useEffect(() => {
@@ -233,7 +236,7 @@ function CameraCapture({ onCapture, onClose }) {
                 className="w-full aspect-[4/3] object-cover"
                 style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
               />
-              {modelsReady && (
+              {!captured && (
                 <div className="absolute inset-0 transition-colors duration-500" style={{ color: overlayColor }}>
                   {anatomicalOverlay}
                 </div>
