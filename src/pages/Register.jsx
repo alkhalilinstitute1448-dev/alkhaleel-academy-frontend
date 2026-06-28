@@ -27,13 +27,19 @@ function CameraCapture({ onCapture, onClose }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const animFrameRef = useRef(null);
+  const boxRef = useRef(null);
+  const facingRef = useRef(facing);
   const [facing, setFacing] = useState('user');
   const [captured, setCaptured] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [modelsAvailable, setModelsAvailable] = useState(false);
   const [faceState, setFaceState] = useState(FACE_STATES.LOADING);
   const [stabilityTime, setStabilityTime] = useState(0);
+  const [instruction, setInstruction] = useState('');
   const isStable = stabilityTime >= STABILITY_SECONDS;
+
+  /* ---------- Sync facing ref (always current in rAF loop) ---------- */
+  useEffect(() => { facingRef.current = facing; }, [facing]);
 
   /* ---------- Camera lifecycle — start FIRST ---------- */
   useEffect(() => {
@@ -81,11 +87,12 @@ function CameraCapture({ onCapture, onClose }) {
     return () => { cancelled = true; };
   }, []);
 
-  /* ---------- face-api.js detection loop ---------- */
+  /* ---------- face-api.js detection + bounding-box tracking ---------- */
   useEffect(() => {
     if (!cameraReady || !modelsAvailable || captured) return;
 
     let active = true;
+    let lastInstruction = '';
     const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
 
     async function tick() {
@@ -100,29 +107,52 @@ function CameraCapture({ onCapture, onClose }) {
 
         if (!active) return;
 
+        const bboxEl = boxRef.current;
+
         if (result) {
           const { box } = result.detection;
-          const lm = result.landmarks;
           const vw = videoRef.current.videoWidth;
           const vh = videoRef.current.videoHeight;
           if (!vw || !vh) { animFrameRef.current = requestAnimationFrame(tick); return; }
 
-          /* Eyes / nose / mouth — if face-api returned landmarks, they exist */
-          const hasEyes = lm.getLeftEye().length > 0 && lm.getRightEye().length > 0;
-          const hasNose = lm.getNose().length > 0;
-          const hasMouth = lm.getMouth().length > 0;
+          /* Normalised face metrics */
+          const fn = { x: box.x / vw, y: box.y / vh, w: box.width / vw, h: box.height / vh };
+          const cx = fn.x + fn.w / 2;
+          const cy = fn.y + fn.h / 2;
 
-          /* Roughly centred (loose 90 % frame bounds) */
-          const cxN = (box.x + box.width / 2) / vw;
-          const cyN = (box.y + box.height / 2) / vh;
-          const roughlyCentred = cxN > 0.05 && cxN < 0.95 && cyN > 0.05 && cyN < 0.95;
-
-          if (hasEyes && hasNose && hasMouth && roughlyCentred) {
-            setFaceState(FACE_STATES.LOCKED);
-          } else {
-            setFaceState(FACE_STATES.SEARCHING);
+          /* Update bounding box position via DOM (avoids re-render every frame) */
+          if (bboxEl) {
+            const mirror = facingRef.current === 'user';
+            bboxEl.style.left = `${(mirror ? 1 - fn.x - fn.w : fn.x) * 100}%`;
+            bboxEl.style.top = `${fn.y * 100}%`;
+            bboxEl.style.width = `${fn.w * 100}%`;
+            bboxEl.style.height = `${fn.h * 100}%`;
+            bboxEl.style.display = 'block';
           }
+
+          /* Size + centre checks */
+          const tooSmall = fn.w < 0.12 || fn.h < 0.12;
+          const tooLarge = fn.w > 0.50 || fn.h > 0.60;
+          const centred = cx > 0.15 && cx < 0.85 && cy > 0.08 && cy < 0.80;
+
+          let nextInstruction;
+          if (tooSmall)            nextInstruction = 'اقترب من الكاميرا';
+          else if (tooLarge)       nextInstruction = 'ابتعد قليلاً عن الكاميرا';
+          else if (!centred)       nextInstruction = 'يرجى توسط الإطار';
+          else                     nextInstruction = '';
+
+          if (nextInstruction !== lastInstruction) {
+            lastInstruction = nextInstruction;
+            setInstruction(nextInstruction);
+          }
+
+          setFaceState(nextInstruction === '' ? FACE_STATES.LOCKED : FACE_STATES.SEARCHING);
         } else {
+          if (bboxEl) bboxEl.style.display = 'none';
+          if (lastInstruction !== '') {
+            lastInstruction = '';
+            setInstruction('');
+          }
           setFaceState(FACE_STATES.SEARCHING);
         }
       } catch {
@@ -188,7 +218,6 @@ function CameraCapture({ onCapture, onClose }) {
     setFacing((f) => (f === 'user' ? 'environment' : 'user'));
   }
 
-  const overlayColor = faceState === FACE_STATES.LOCKED ? '#00ff66' : '#00ffcc';
   const buttonActive = faceState === FACE_STATES.LOCKED && isStable;
 
   return (
@@ -211,11 +240,16 @@ function CameraCapture({ onCapture, onClose }) {
                 className="w-full aspect-[4/3] object-cover"
                 style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
               />
-              {!captured && (
-                <div className="absolute inset-0 transition-colors duration-500" style={{ color: overlayColor }}>
-                  {anatomicalOverlay}
-                </div>
-              )}
+              {/* Dynamic face-tracking bounding box */}
+              <div
+                ref={boxRef}
+                className={`absolute rounded-2xl border-[3px] pointer-events-none z-20 transition-all duration-300 ${
+                  faceState === FACE_STATES.LOCKED
+                    ? 'border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)] animate-pulse'
+                    : 'border-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.3)]'
+                }`}
+                style={{ display: 'none' }}
+              />
               <button
                 type="button"
                 onClick={toggleFacing}
@@ -227,14 +261,19 @@ function CameraCapture({ onCapture, onClose }) {
               </button>
             </div>
 
-            {/* ══ State-aware feedback ══ */}
+            {/* ══ Live instructional feedback ══ */}
             <p className="text-center mt-3 min-h-[2rem]">
               {faceState === FACE_STATES.LOADING && (
                 <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-amber-500/15 text-amber-300">
                   جاري تحميل نماذج الذكاء الاصطناعي...
                 </span>
               )}
-              {faceState === FACE_STATES.SEARCHING && (
+              {faceState === FACE_STATES.SEARCHING && instruction && (
+                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-yellow-500/15 text-yellow-300">
+                  {instruction}
+                </span>
+              )}
+              {faceState === FACE_STATES.SEARCHING && !instruction && (
                 <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-gray-600/30 text-gray-400">
                   جاري البحث عن وجه
                 </span>
@@ -243,7 +282,7 @@ function CameraCapture({ onCapture, onClose }) {
                 <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-emerald-500/20 text-emerald-300 transition-all duration-300">
                   {isStable
                     ? '✅ تم التقاط الصورة'
-                    : `فحص ملامح الوجه (${stabilityTime}/${STABILITY_SECONDS} ثانية)`}
+                    : `تطابق تام – ثبت وضعك (${stabilityTime}/${STABILITY_SECONDS} ثانية)`}
                 </span>
               )}
             </p>
@@ -307,153 +346,6 @@ function CameraCapture({ onCapture, onClose }) {
     </div>
   );
 }
-
-const anatomicalOverlay = (
-  <svg viewBox="0 0 640 480" className="absolute inset-0 w-full h-full pointer-events-none select-none" style={{ transform: 'scaleX(-1)' }}>
-    <defs>
-      <filter id="faceNeonGlow">
-        <feGaussianBlur stdDeviation="3" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-      <filter id="faceSoftGlow">
-        <feGaussianBlur stdDeviation="1.5" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-    </defs>
-    <g filter="url(#faceNeonGlow)" stroke="currentColor" strokeWidth="1.8" fill="none" opacity="0.80">
-      {/* ── Cranial / face outline ── */}
-      <path d="M 320 22
-               C 262 22 218 48 204 94
-               C 196 126 200 166 212 194
-               C 224 222 246 244 270 256
-               C 292 266 308 268 320 269
-               C 332 268 348 266 370 256
-               C 394 244 416 222 428 194
-               C 440 166 444 126 436 94
-               C 422 48 378 22 320 22 Z" />
-
-      {/* ── Inner facial guide ── */}
-      <path d="M 320 46
-               C 276 46 244 66 232 100
-               C 224 124 228 156 240 178
-               C 252 198 272 214 294 224
-               C 308 230 314 232 320 233
-               C 326 232 332 230 346 224
-               C 368 214 388 198 400 178
-               C 412 156 416 124 408 100
-               C 396 66 364 46 320 46 Z"
-            strokeWidth="0.7" strokeDasharray="3 5" opacity="0.18" />
-
-      {/* ── Orbital rims ── */}
-      <path d="M 248 132 Q 276 122 304 134" strokeWidth="0.5" opacity="0.12" />
-      <path d="M 392 132 Q 364 122 336 134" strokeWidth="0.5" opacity="0.12" />
-
-      {/* ── Eyebrows ── */}
-      <path d="M 252 124 Q 268 112 296 122" strokeWidth="2.5" strokeLinecap="round" />
-      <path d="M 388 124 Q 372 112 344 122" strokeWidth="2.5" strokeLinecap="round" />
-
-      {/* ── Left eye ── */}
-      <ellipse cx="276" cy="142" rx="24" ry="8.5" strokeWidth="1.8" />
-      <ellipse cx="276" cy="142" rx="10" ry="10" strokeWidth="1" opacity="0.28" />
-      <circle cx="276" cy="142" r="3" fill="currentColor" opacity="0.10" />
-
-      {/* ── Right eye ── */}
-      <ellipse cx="364" cy="142" rx="24" ry="8.5" strokeWidth="1.8" />
-      <ellipse cx="364" cy="142" rx="10" ry="10" strokeWidth="1" opacity="0.28" />
-      <circle cx="364" cy="142" r="3" fill="currentColor" opacity="0.10" />
-
-      {/* ── Under-eye lines ── */}
-      <path d="M 256 155 Q 276 161 296 155" strokeWidth="0.5" opacity="0.16" />
-      <path d="M 344 155 Q 364 161 384 155" strokeWidth="0.5" opacity="0.16" />
-
-      {/* ── Nose bridge ── */}
-      <path d="M 320 144 L 320 188" strokeWidth="1.5" opacity="0.40" />
-      <path d="M 314 144 Q 320 140 326 144" strokeWidth="0.6" opacity="0.12" />
-
-      {/* ── Nose tip & nostrils ── */}
-      <path d="M 302 194 Q 320 208 338 194" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M 302 196 Q 310 200 312 196" strokeWidth="1.2" strokeLinecap="round" opacity="0.32" />
-      <path d="M 338 196 Q 330 200 328 196" strokeWidth="1.2" strokeLinecap="round" opacity="0.32" />
-
-      {/* ── Nasolabial folds ── */}
-      <path d="M 292 190 Q 284 210 292 224" strokeWidth="0.5" opacity="0.10" />
-      <path d="M 348 190 Q 356 210 348 224" strokeWidth="0.5" opacity="0.10" />
-
-      {/* ── Mouth ── */}
-      <path d="M 288 224 Q 320 238 352 224" strokeWidth="2" strokeLinecap="round" />
-      <path d="M 288 224 Q 320 216 352 224" strokeWidth="1.5" strokeLinecap="round" opacity="0.32" />
-      <line x1="292" y1="226" x2="348" y2="226" strokeWidth="0.5" opacity="0.12" />
-
-      {/* ── Labial commissure ── */}
-      <path d="M 286 224 Q 284 226 286 228" strokeWidth="0.4" opacity="0.08" />
-      <path d="M 354 224 Q 356 226 354 228" strokeWidth="0.4" opacity="0.08" />
-
-      {/* ── Philtrum ── */}
-      <line x1="320" y1="208" x2="320" y2="224" strokeWidth="0.5" opacity="0.10" />
-
-      {/* ── Chin crease ── */}
-      <path d="M 304 250 Q 320 254 336 250" strokeWidth="0.4" opacity="0.10" />
-
-      {/* ── Ears ── */}
-      <path d="M 206 136 C 190 144 184 160 190 172 C 196 182 208 178 210 168" strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M 194 152 C 190 158 192 164 196 166" strokeWidth="0.5" opacity="0.16" />
-      <path d="M 434 136 C 450 144 456 160 450 172 C 444 182 432 178 430 168" strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M 446 152 C 450 158 448 164 444 166" strokeWidth="0.5" opacity="0.16" />
-
-      {/* ── Zygomatic (cheekbone) hints ── */}
-      <path d="M 218 168 Q 226 176 232 172" strokeWidth="0.4" opacity="0.08" />
-      <path d="M 422 168 Q 414 176 408 172" strokeWidth="0.4" opacity="0.08" />
-
-      {/* ── Jawline ── */}
-      <path d="M 236 222 C 252 248 278 262 320 266 C 362 262 388 248 404 222" strokeWidth="0.7" opacity="0.10" />
-
-      {/* ── Masseter muscle hint ── */}
-      <path d="M 224 200 Q 218 214 226 224" strokeWidth="0.4" opacity="0.06" />
-      <path d="M 416 200 Q 422 214 414 224" strokeWidth="0.4" opacity="0.06" />
-
-      {/* ── Neck ── */}
-      <path d="M 278 266 L 268 314 C 262 332 260 348 268 362 L 274 374" strokeWidth="2" strokeLinecap="round" />
-      <path d="M 362 266 L 372 314 C 378 332 380 348 372 362 L 366 374" strokeWidth="2" strokeLinecap="round" />
-      <line x1="320" y1="268" x2="320" y2="374" strokeWidth="0.4" opacity="0.08" />
-
-      {/* ── Sternocleidomastoid ── */}
-      <path d="M 284 268 Q 294 310 290 348" strokeWidth="0.7" opacity="0.16" />
-      <path d="M 356 268 Q 346 310 350 348" strokeWidth="0.7" opacity="0.16" />
-
-      {/* ── Adam's apple ── */}
-      <path d="M 312 312 Q 320 318 328 312" strokeWidth="0.4" opacity="0.06" />
-
-      {/* ── Shoulders / trapezius ── */}
-      <path d="M 274 374 C 234 386 172 404 112 434 C 82 450 62 462 48 480 L 320 480" strokeWidth="2" strokeLinecap="round" />
-      <path d="M 366 374 C 406 386 468 404 528 434 C 558 450 578 462 592 480 L 320 480" strokeWidth="2" strokeLinecap="round" />
-
-      {/* ── Clavicle ── */}
-      <path d="M 274 376 Q 320 392 366 376" strokeWidth="0.5" opacity="0.10" strokeDasharray="2 3" />
-
-      {/* ── Trapezius definition ── */}
-      <path d="M 290 364 Q 320 382 350 364" strokeWidth="0.5" opacity="0.06" />
-
-      {/* ── Deltoid hint ── */}
-      <path d="M 82 450 Q 90 444 98 452" strokeWidth="0.4" opacity="0.06" />
-      <path d="M 558 450 Q 550 444 542 452" strokeWidth="0.4" opacity="0.06" />
-
-      {/* ── Hairline ── */}
-      <path d="M 232 72 C 254 48 288 32 320 28 C 352 32 386 48 408 72" strokeWidth="0.7" opacity="0.16" strokeDasharray="5 4" />
-
-      {/* ── Measuring guidelines ── */}
-      <line x1="208" y1="142" x2="250" y2="142" strokeWidth="0.3" opacity="0.08" strokeDasharray="2 3" />
-      <line x1="390" y1="142" x2="432" y2="142" strokeWidth="0.3" opacity="0.08" strokeDasharray="2 3" />
-      <line x1="320" y1="224" x2="384" y2="224" strokeWidth="0.3" opacity="0.08" strokeDasharray="2 3" />
-      <line x1="256" y1="224" x2="320" y2="224" strokeWidth="0.3" opacity="0.08" strokeDasharray="2 3" />
-    </g>
-  </svg>
-);
 
 function CountryPhoneRow({ label, required, country, digits, onCountryChange, onDigitsChange, error, showOptional }) {
   const selected = COUNTRIES.find((c) => c.code === country) || COUNTRIES[0];
