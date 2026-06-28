@@ -27,67 +27,34 @@ const initialForm = {
   birthYear: '', stage: '',
 };
 
-const FACE_OVERLAY = (
-  <svg viewBox="0 0 640 480" className="absolute inset-0 w-full h-full pointer-events-none" style={{ transform: 'scaleX(-1)' }}>
-    <defs>
-      <filter id="neonGlow">
-        <feGaussianBlur stdDeviation="3" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-    </defs>
-    <g filter="url(#neonGlow)" stroke="#00ffcc" strokeWidth="2" fill="none" opacity="0.7">
-      <ellipse cx="320" cy="165" rx="100" ry="130" />
-      <ellipse cx="320" cy="165" rx="100" ry="130" strokeWidth="1" strokeDasharray="6 4" opacity="0.35" />
-      <line x1="250" y1="145" x2="270" y2="145" strokeWidth="2.5" strokeLinecap="round" />
-      <line x1="370" y1="145" x2="390" y2="145" strokeWidth="2.5" strokeLinecap="round" />
-      <line x1="320" y1="160" x2="320" y2="190" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
-      <path d="M290 210 Q320 225 350 210" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.7" />
-      <path d="M270 290 Q320 340 370 290" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.6" />
-    </g>
-  </svg>
-);
-
-const STABILITY_SECONDS = 18;
+const STABILITY_SECONDS = 5;
 
 function CameraCapture({ onCapture, onClose }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const animFrameRef = useRef(null);
   const [facing, setFacing] = useState('user');
   const [captured, setCaptured] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
+  const [faceAligned, setFaceAligned] = useState(false);
   const [stabilityTime, setStabilityTime] = useState(0);
-  const stabilityInterval = useRef(null);
+  const [fdSupported, setFdSupported] = useState(true);
   const isStable = stabilityTime >= STABILITY_SECONDS;
+  const overlayColor = faceAligned ? '#00ff66' : '#00ffcc';
 
+  /* ---------- Camera lifecycle ---------- */
   useEffect(() => {
     setCameraReady(false);
     setStabilityTime(0);
+    setFaceAligned(false);
     startCamera(facing);
     return () => stopCamera();
   }, [facing]);
 
-  useEffect(() => {
-    if (!cameraReady || captured) return;
-    stabilityInterval.current = setInterval(() => {
-      setStabilityTime((prev) => {
-        if (prev >= STABILITY_SECONDS - 1) {
-          clearInterval(stabilityInterval.current);
-          return STABILITY_SECONDS;
-        }
-        return prev + 1;
-      });
-    }, 1000);
-    return () => {
-      if (stabilityInterval.current) clearInterval(stabilityInterval.current);
-    };
-  }, [cameraReady, captured]);
-
   function startCamera(f) {
     stopCamera();
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: 640, height: 480 } })
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: f, width: 640, height: 480 } })
       .then((s) => {
         streamRef.current = s;
         if (videoRef.current) videoRef.current.srcObject = s;
@@ -103,8 +70,102 @@ function CameraCapture({ onCapture, onClose }) {
     }
   }
 
-  function capture() {
-    if (!isStable) return;
+  /* ---------- Face-detection loop ---------- */
+  useEffect(() => {
+    if (!cameraReady || captured) return;
+
+    let detector = null;
+    try {
+      detector = new FaceDetector({ maxDetectedFaces: 1, fastMode: true });
+    } catch {
+      setFdSupported(false);
+      setFaceAligned(true);
+      return;
+    }
+
+    let active = true;
+    let consecutive = 0;
+    const REQUIRED = 2;
+
+    async function tick() {
+      if (!active || !videoRef.current) return;
+      try {
+        const faces = await detector.detect(videoRef.current);
+        if (!active) return;
+
+        if (faces.length === 1) {
+          const f = faces[0];
+          const box = f.boundingBox;
+          const vw = videoRef.current.videoWidth || 640;
+          const vh = videoRef.current.videoHeight || 480;
+
+          const cx = box.x + box.width / 2;
+          const cy = box.y + box.height / 2;
+
+          const centered =
+            Math.abs(cx - vw / 2) < vw * 0.12 &&
+            Math.abs(cy - vh * 0.35) < vh * 0.12;
+
+          const area = box.width * box.height;
+          const frameArea = vw * vh;
+          const goodSize = area / frameArea > 0.10 && area / frameArea < 0.32;
+
+          const types = new Set((f.landmarks || []).map((l) => l.type));
+          const hasFeatures = types.has('eye') && types.has('nose') && types.has('mouth');
+
+          if (centered && goodSize && hasFeatures) {
+            consecutive = Math.min(consecutive + 1, REQUIRED + 1);
+            if (consecutive >= REQUIRED) setFaceAligned(true);
+          } else {
+            consecutive = 0;
+            setFaceAligned(false);
+          }
+        } else {
+          consecutive = 0;
+          setFaceAligned(false);
+        }
+      } catch {
+        if (active) setFaceAligned(false);
+      }
+      animFrameRef.current = requestAnimationFrame(tick);
+    }
+
+    animFrameRef.current = requestAnimationFrame(tick);
+    return () => {
+      active = false;
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [cameraReady, captured]);
+
+  /* ---------- Stability countdown ---------- */
+  useEffect(() => {
+    if (!faceAligned) setStabilityTime(0);
+  }, [faceAligned]);
+
+  useEffect(() => {
+    if (!faceAligned || !cameraReady || captured) return;
+
+    const timer = setInterval(() => {
+      setStabilityTime((prev) => {
+        if (prev >= STABILITY_SECONDS - 1) {
+          clearInterval(timer);
+          return STABILITY_SECONDS;
+        }
+        return prev + 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [faceAligned, cameraReady, captured]);
+
+  /* ---------- Auto-capture ---------- */
+  useEffect(() => {
+    if (stabilityTime >= STABILITY_SECONDS && !captured && cameraReady) {
+      performCapture();
+    }
+  }, [stabilityTime, captured, cameraReady]);
+
+  function performCapture() {
     const v = videoRef.current;
     if (!v) return;
     const c = document.createElement('canvas');
@@ -120,14 +181,17 @@ function CameraCapture({ onCapture, onClose }) {
   function retake() {
     setCaptured(null);
     setStabilityTime(0);
+    setFaceAligned(false);
     setCameraReady(false);
     startCamera(facing);
   }
 
   function confirm() {
-    fetch(captured).then((r) => r.blob()).then((blob) => {
-      onCapture(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
-    });
+    fetch(captured)
+      .then((r) => r.blob())
+      .then((blob) => {
+        onCapture(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
+      });
     onClose();
   }
 
@@ -135,16 +199,21 @@ function CameraCapture({ onCapture, onClose }) {
     setFacing((f) => (f === 'user' ? 'environment' : 'user'));
   }
 
+  /* ---------- Render ---------- */
   return (
     <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
       <div className="relative w-full max-w-md">
         {!captured ? (
           <>
-            <p className="text-center text-sm text-cyan-300 mb-3 font-medium leading-relaxed">
-              ضع وجهك في وسط الإطار وحافظ على ثبات الوضع
-              <br />ثم اضغط على زر الالتقاط عندما يصبح باللون الأخضر
-            </p>
-            <div className="relative rounded-2xl overflow-hidden bg-black">
+            {/* ── Camera view with anatomical overlay ── */}
+            <div
+              className="relative rounded-2xl overflow-hidden bg-black transition-all duration-500"
+              style={{
+                boxShadow: faceAligned
+                  ? '0 0 30px rgba(0,255,102,0.35), 0 0 60px rgba(0,255,102,0.15)'
+                  : 'none',
+              }}
+            >
               <video
                 ref={videoRef}
                 autoPlay
@@ -152,7 +221,9 @@ function CameraCapture({ onCapture, onClose }) {
                 className="w-full aspect-[4/3] object-cover"
                 style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
               />
-              {FACE_OVERLAY}
+              <div className="absolute inset-0 transition-colors duration-500" style={{ color: overlayColor }}>
+                {anatomicalOverlay}
+              </div>
               <button
                 type="button"
                 onClick={toggleFacing}
@@ -163,18 +234,79 @@ function CameraCapture({ onCapture, onClose }) {
                 </svg>
               </button>
             </div>
-            <div className="mt-3 text-center">
-              <span className={`inline-block text-sm font-bold px-4 py-1.5 rounded-full transition-all duration-300 ${isStable ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
-                {isStable
-                  ? '✅ ممتاز – تم تثبيت الوضع'
-                  : `🟡 ممتاز – ثبت الوضع (${stabilityTime}/${STABILITY_SECONDS} ثانية)`}
+
+            {/* ── Feedback / countdown ── */}
+            <p className="text-center mt-3 min-h-[2rem]">
+              {!fdSupported || faceAligned ? (
+                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-emerald-500/20 text-emerald-300 transition-all duration-300">
+                  {isStable
+                    ? '✅ تطابق تام – تم التقاط الصورة'
+                    : `🟢 تطابق تام – ثبت الوضع (${stabilityTime}/${STABILITY_SECONDS} ثانية)`}
+                </span>
+              ) : (
+                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-amber-500/15 text-amber-300">
+                  قم بتوسيط وجهك في الإطار
+                </span>
+              )}
+            </p>
+
+            {/* ── Capture button with "التقاط الصورة" ── */}
+            <div className="flex flex-col items-center mt-4">
+              <span
+                className={`text-xs font-bold mb-2 transition-colors duration-300 ${isStable ? 'text-emerald-400' : 'text-gray-500'}`}
+              >
+                التقاط الصورة
               </span>
-            </div>
-            <div className="flex justify-center gap-5 mt-4">
-              <button type="button" onClick={capture} disabled={!isStable} className={`w-16 h-16 rounded-full transition-all duration-300 flex items-center justify-center ${isStable ? 'bg-emerald-500 hover:bg-emerald-400 shadow-lg shadow-emerald-500/40 cursor-pointer' : 'bg-gray-600/50 cursor-not-allowed'}`}>
-                <div className={`w-12 h-12 rounded-full transition-colors ${isStable ? 'bg-white' : 'bg-gray-400'}`} />
+              <button
+                type="button"
+                disabled={!isStable}
+                className={`w-16 h-16 rounded-full transition-all duration-300 flex items-center justify-center ${
+                  isStable
+                    ? 'bg-emerald-500 hover:bg-emerald-400 shadow-lg shadow-emerald-500/40 cursor-pointer'
+                    : 'bg-gray-600/30 cursor-not-allowed'
+                }`}
+              >
+                <div
+                  className={`w-12 h-12 rounded-full transition-colors ${isStable ? 'bg-white' : 'bg-gray-500'}`}
+                />
               </button>
-              <button type="button" onClick={onClose} className="btn-secondary !px-5 self-center">إلغاء</button>
+            </div>
+
+            {/* ── Review section (grayed pre-capture) ── */}
+            <div className="mt-5 text-center opacity-40 pointer-events-none">
+              <h3 className="text-sm font-bold text-gray-400 mb-3">مراجعة الصورة</h3>
+              <div className="flex justify-center gap-3">
+                <button
+                  type="button"
+                  disabled
+                  className="!px-6 py-2.5 rounded-xl text-sm font-bold bg-gray-700 text-gray-500 flex items-center gap-2 cursor-not-allowed"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                  تأكيد الصورة
+                </button>
+                <button
+                  type="button"
+                  disabled
+                  className="!px-6 py-2.5 rounded-xl text-sm font-bold bg-gray-700 text-gray-500 flex items-center gap-2 cursor-not-allowed"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  إعادة التصوير
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-center mt-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                إلغاء
+              </button>
             </div>
           </>
         ) : (
@@ -183,13 +315,21 @@ function CameraCapture({ onCapture, onClose }) {
             <div className="mt-4 text-center">
               <h3 className="text-sm font-bold text-gold-400 mb-3">مراجعة الصورة</h3>
               <div className="flex justify-center gap-3">
-                <button type="button" onClick={confirm} className="btn-primary !px-6 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={confirm}
+                  className="btn-primary !px-6 flex items-center gap-2"
+                >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
                   </svg>
                   تأكيد الصورة
                 </button>
-                <button type="button" onClick={retake} className="btn-secondary !px-6 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={retake}
+                  className="btn-secondary !px-6 flex items-center gap-2"
+                >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
@@ -203,6 +343,133 @@ function CameraCapture({ onCapture, onClose }) {
     </div>
   );
 }
+
+const anatomicalOverlay = (
+  <svg viewBox="0 0 640 480" className="absolute inset-0 w-full h-full pointer-events-none select-none" style={{ transform: 'scaleX(-1)' }}>
+    <defs>
+      <filter id="faceNeonGlow">
+        <feGaussianBlur stdDeviation="3" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id="faceSoftGlow">
+        <feGaussianBlur stdDeviation="1.5" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#faceNeonGlow)" stroke="currentColor" strokeWidth="1.8" fill="none" opacity="0.75">
+      {/* ── Cranial / face outline ── */}
+      <path d="M 320 24
+               C 264 24 222 50 208 96
+               C 200 128 204 168 216 196
+               C 228 224 250 246 274 258
+               C 294 267 308 269 320 270
+               C 332 269 346 267 366 258
+               C 390 246 412 224 424 196
+               C 436 168 440 128 432 96
+               C 418 50 376 24 320 24 Z" />
+
+      {/* ── Inner facial guide ── */}
+      <path d="M 320 48
+               C 278 48 246 68 234 102
+               C 226 126 230 158 242 180
+               C 254 200 274 216 296 226
+               C 308 232 314 234 320 235
+               C 326 234 332 232 344 226
+               C 366 216 386 200 398 180
+               C 410 158 414 126 406 102
+               C 394 68 362 48 320 48 Z"
+            strokeWidth="0.7" strokeDasharray="3 5" opacity="0.2" />
+
+      {/* ── Eyebrows ── */}
+      <path d="M 254 126 Q 270 114 296 124" strokeWidth="2.5" strokeLinecap="round" />
+      <path d="M 386 126 Q 370 114 344 124" strokeWidth="2.5" strokeLinecap="round" />
+
+      {/* ── Left eye ── */}
+      <ellipse cx="276" cy="143" rx="24" ry="8.5" strokeWidth="1.8" />
+      <ellipse cx="276" cy="143" rx="10" ry="10" strokeWidth="1" opacity="0.3" />
+      <circle cx="276" cy="143" r="3" fill="currentColor" opacity="0.12" />
+
+      {/* ── Right eye ── */}
+      <ellipse cx="364" cy="143" rx="24" ry="8.5" strokeWidth="1.8" />
+      <ellipse cx="364" cy="143" rx="10" ry="10" strokeWidth="1" opacity="0.3" />
+      <circle cx="364" cy="143" r="3" fill="currentColor" opacity="0.12" />
+
+      {/* ── Under-eye lines ── */}
+      <path d="M 258 156 Q 276 162 294 156" strokeWidth="0.5" opacity="0.18" />
+      <path d="M 346 156 Q 364 162 382 156" strokeWidth="0.5" opacity="0.18" />
+
+      {/* ── Nose bridge ── */}
+      <path d="M 320 146 L 320 190" strokeWidth="1.5" opacity="0.45" />
+      <path d="M 315 146 Q 320 142 325 146" strokeWidth="0.6" opacity="0.15" />
+
+      {/* ── Nose tip & nostrils ── */}
+      <path d="M 302 196 Q 320 210 338 196" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M 302 198 Q 310 202 312 198" strokeWidth="1.2" strokeLinecap="round" opacity="0.35" />
+      <path d="M 338 198 Q 330 202 328 198" strokeWidth="1.2" strokeLinecap="round" opacity="0.35" />
+
+      {/* ── Nasolabial folds ── */}
+      <path d="M 294 192 Q 286 212 294 226" strokeWidth="0.5" opacity="0.12" />
+      <path d="M 346 192 Q 354 212 346 226" strokeWidth="0.5" opacity="0.12" />
+
+      {/* ── Mouth ── */}
+      <path d="M 290 226 Q 320 240 350 226" strokeWidth="2" strokeLinecap="round" />
+      <path d="M 290 226 Q 320 218 350 226" strokeWidth="1.5" strokeLinecap="round" opacity="0.35" />
+      <line x1="294" y1="228" x2="346" y2="228" strokeWidth="0.5" opacity="0.15" />
+
+      {/* ── Philtrum ── */}
+      <line x1="320" y1="210" x2="320" y2="226" strokeWidth="0.5" opacity="0.12" />
+
+      {/* ── Chin crease ── */}
+      <path d="M 306 252 Q 320 256 334 252" strokeWidth="0.4" opacity="0.12" />
+
+      {/* ── Ears ── */}
+      <path d="M 210 138 C 194 146 188 162 194 174 C 200 184 212 180 214 170" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M 198 154 C 194 160 196 166 200 168" strokeWidth="0.5" opacity="0.18" />
+      <path d="M 430 138 C 446 146 452 162 446 174 C 440 184 428 180 426 170" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M 442 154 C 446 160 444 166 440 168" strokeWidth="0.5" opacity="0.18" />
+
+      {/* ── Jawline ── */}
+      <path d="M 238 224 C 254 250 280 264 320 268 C 360 264 386 250 402 224" strokeWidth="0.7" opacity="0.12" />
+
+      {/* ── Neck ── */}
+      <path d="M 280 268 L 270 316 C 264 334 262 350 270 364 L 276 376" strokeWidth="2" strokeLinecap="round" />
+      <path d="M 360 268 L 370 316 C 376 334 378 350 370 364 L 364 376" strokeWidth="2" strokeLinecap="round" />
+      <line x1="320" y1="270" x2="320" y2="376" strokeWidth="0.4" opacity="0.10" />
+
+      {/* ── Sternocleidomastoid ── */}
+      <path d="M 286 270 Q 296 312 292 350" strokeWidth="0.7" opacity="0.18" />
+      <path d="M 354 270 Q 344 312 348 350" strokeWidth="0.7" opacity="0.18" />
+
+      {/* ── Adam's apple ── */}
+      <path d="M 312 314 Q 320 320 328 314" strokeWidth="0.4" opacity="0.08" />
+
+      {/* ── Shoulders / trapezius ── */}
+      <path d="M 276 376 C 236 388 174 406 114 436 C 84 452 64 464 50 480 L 320 480" strokeWidth="2" strokeLinecap="round" />
+      <path d="M 364 376 C 404 388 466 406 526 436 C 556 452 576 464 590 480 L 320 480" strokeWidth="2" strokeLinecap="round" />
+
+      {/* ── Clavicle ── */}
+      <path d="M 276 378 Q 320 394 364 378" strokeWidth="0.5" opacity="0.12" strokeDasharray="2 3" />
+
+      {/* ── Trapezius definition ── */}
+      <path d="M 292 366 Q 320 384 348 366" strokeWidth="0.5" opacity="0.08" />
+
+      {/* ── Hairline ── */}
+      <path d="M 234 74 C 256 50 290 34 320 30 C 350 34 384 50 406 74" strokeWidth="0.7" opacity="0.18" strokeDasharray="5 4" />
+
+      {/* ── Measuring guidelines ── */}
+      <line x1="212" y1="143" x2="252" y2="143" strokeWidth="0.3" opacity="0.10" strokeDasharray="2 3" />
+      <line x1="388" y1="143" x2="428" y2="143" strokeWidth="0.3" opacity="0.10" strokeDasharray="2 3" />
+      <line x1="320" y1="226" x2="382" y2="226" strokeWidth="0.3" opacity="0.10" strokeDasharray="2 3" />
+      <line x1="258" y1="226" x2="320" y2="226" strokeWidth="0.3" opacity="0.10" strokeDasharray="2 3" />
+    </g>
+  </svg>
+);
 
 function CountryPhoneRow({ label, required, country, digits, onCountryChange, onDigitsChange, error, showOptional }) {
   const selected = COUNTRIES.find((c) => c.code === country) || COUNTRIES[0];
