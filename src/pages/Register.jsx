@@ -4,7 +4,7 @@ import { isValidPhoneNumber } from 'libphonenumber-js';
 import api from '../api';
 import SelectField from '../components/SelectField';
 import { COUNTRIES, normalizePhone, buildFullPhone, extractLocalDigits } from '../utils/phone';
-import * as faceapi from 'face-api.js';
+
 
 const STAGES = [
   'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع',
@@ -18,34 +18,17 @@ const initialForm = {
   currentJob: '', nationality: '',
 };
 
-const STABILITY_SECONDS = 5;
-const MODEL_URL = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights';
 
-const FACE_STATES = { LOADING: 'loading', SEARCHING: 'searching', LOCKED: 'locked' };
 
 function CameraCapture({ onCapture, onClose }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const animFrameRef = useRef(null);
-  const boxRef = useRef(null);
-  const facingRef = useRef(facing);
   const [facing, setFacing] = useState('user');
   const [captured, setCaptured] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [modelsAvailable, setModelsAvailable] = useState(false);
-  const [faceState, setFaceState] = useState(FACE_STATES.LOADING);
-  const [stabilityTime, setStabilityTime] = useState(0);
-  const [instruction, setInstruction] = useState('');
-  const isStable = stabilityTime >= STABILITY_SECONDS;
 
-  /* ---------- Sync facing ref (always current in rAF loop) ---------- */
-  useEffect(() => { facingRef.current = facing; }, [facing]);
-
-  /* ---------- Camera lifecycle — start FIRST ---------- */
   useEffect(() => {
     setCameraReady(false);
-    setStabilityTime(0);
-    setFaceState(FACE_STATES.LOADING);
     startCamera(facing);
     return () => stopCamera();
   }, [facing]);
@@ -58,11 +41,8 @@ function CameraCapture({ onCapture, onClose }) {
         streamRef.current = s;
         if (videoRef.current) videoRef.current.srcObject = s;
         setCameraReady(true);
-        setFaceState(FACE_STATES.SEARCHING);
       })
-      .catch((err) => {
-        console.error('Camera error:', err);
-      });
+      .catch((err) => { console.error('Camera error:', err); });
   }
 
   function stopCamera() {
@@ -71,120 +51,6 @@ function CameraCapture({ onCapture, onClose }) {
       streamRef.current = null;
     }
   }
-
-  /* ---------- Load face-api models (parallel — don't block camera) ---------- */
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-    ])
-      .then(() => { if (!cancelled) setModelsAvailable(true); })
-      .catch((err) => {
-        console.error('Face-api model load error:', err);
-        if (!cancelled) setModelsAvailable(false);
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  /* ---------- face-api.js detection + bounding-box tracking ---------- */
-  useEffect(() => {
-    if (!cameraReady || !modelsAvailable || captured) return;
-
-    let active = true;
-    let lastInstruction = '';
-    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
-
-    async function tick() {
-      if (!active || !videoRef.current || !videoRef.current.videoWidth) {
-        animFrameRef.current = requestAnimationFrame(tick);
-        return;
-      }
-      try {
-        const result = await faceapi
-          .detectSingleFace(videoRef.current, options)
-          .withFaceLandmarks();
-
-        if (!active) return;
-
-        const bboxEl = boxRef.current;
-
-        if (result) {
-          const { box } = result.detection;
-          const vw = videoRef.current.videoWidth;
-          const vh = videoRef.current.videoHeight;
-          if (!vw || !vh) { animFrameRef.current = requestAnimationFrame(tick); return; }
-
-          /* Normalised face metrics */
-          const fn = { x: box.x / vw, y: box.y / vh, w: box.width / vw, h: box.height / vh };
-          const cx = fn.x + fn.w / 2;
-          const cy = fn.y + fn.h / 2;
-
-          /* Update bounding box position via DOM (avoids re-render every frame) */
-          if (bboxEl) {
-            const mirror = facingRef.current === 'user';
-            bboxEl.style.left = `${(mirror ? 1 - fn.x - fn.w : fn.x) * 100}%`;
-            bboxEl.style.top = `${fn.y * 100}%`;
-            bboxEl.style.width = `${fn.w * 100}%`;
-            bboxEl.style.height = `${fn.h * 100}%`;
-            bboxEl.style.display = 'block';
-          }
-
-          /* Size + centre checks */
-          const tooSmall = fn.w < 0.12 || fn.h < 0.12;
-          const tooLarge = fn.w > 0.50 || fn.h > 0.60;
-          const centred = cx > 0.15 && cx < 0.85 && cy > 0.08 && cy < 0.80;
-
-          let nextInstruction;
-          if (tooSmall)            nextInstruction = 'اقترب من الكاميرا';
-          else if (tooLarge)       nextInstruction = 'ابتعد قليلاً عن الكاميرا';
-          else if (!centred)       nextInstruction = 'يرجى توسط الإطار';
-          else                     nextInstruction = '';
-
-          if (nextInstruction !== lastInstruction) {
-            lastInstruction = nextInstruction;
-            setInstruction(nextInstruction);
-          }
-
-          setFaceState(nextInstruction === '' ? FACE_STATES.LOCKED : FACE_STATES.SEARCHING);
-        } else {
-          if (bboxEl) bboxEl.style.display = 'none';
-          if (lastInstruction !== '') {
-            lastInstruction = '';
-            setInstruction('');
-          }
-          setFaceState(FACE_STATES.SEARCHING);
-        }
-      } catch {
-        if (active) setFaceState(FACE_STATES.SEARCHING);
-      }
-      animFrameRef.current = requestAnimationFrame(tick);
-    }
-
-    animFrameRef.current = requestAnimationFrame(tick);
-    return () => { active = false; if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
-  }, [cameraReady, modelsAvailable, captured]);
-
-  /* ---------- Stability countdown ---------- */
-  useEffect(() => {
-    if (faceState !== FACE_STATES.LOCKED) setStabilityTime(0);
-  }, [faceState]);
-
-  useEffect(() => {
-    if (faceState !== FACE_STATES.LOCKED || captured) return;
-    const timer = setInterval(() => {
-      setStabilityTime((prev) => {
-        if (prev >= STABILITY_SECONDS - 1) { clearInterval(timer); return STABILITY_SECONDS; }
-        return prev + 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [faceState, captured]);
-
-  /* ---------- Auto-capture ---------- */
-  useEffect(() => {
-    if (isStable && !captured && cameraReady) performCapture();
-  }, [isStable, captured, cameraReady]);
 
   function performCapture() {
     const v = videoRef.current;
@@ -201,8 +67,6 @@ function CameraCapture({ onCapture, onClose }) {
 
   function retake() {
     setCaptured(null);
-    setStabilityTime(0);
-    setFaceState(FACE_STATES.SEARCHING);
     setCameraReady(false);
     startCamera(facing);
   }
@@ -218,21 +82,12 @@ function CameraCapture({ onCapture, onClose }) {
     setFacing((f) => (f === 'user' ? 'environment' : 'user'));
   }
 
-  const buttonActive = faceState === FACE_STATES.LOCKED && isStable;
-
   return (
     <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
       <div className="relative w-full max-w-md">
         {!captured ? (
           <>
-            {/* ══ Camera + overlay ══ */}
-            <div
-              className="relative rounded-2xl overflow-hidden bg-black transition-all duration-500"
-              style={{
-                boxShadow: faceState === FACE_STATES.LOCKED
-                  ? '0 0 30px rgba(0,255,102,0.35), 0 0 60px rgba(0,255,102,0.15)' : 'none',
-              }}
-            >
+            <div className="relative rounded-2xl overflow-hidden bg-black">
               <video
                 ref={videoRef}
                 autoPlay
@@ -240,16 +95,13 @@ function CameraCapture({ onCapture, onClose }) {
                 className="w-full aspect-[4/3] object-cover"
                 style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
               />
-              {/* Dynamic face-tracking bounding box */}
+              {/* Static 3×4 grid + head contour guide */}
               <div
-                ref={boxRef}
-                className={`absolute rounded-2xl border-[3px] pointer-events-none z-20 transition-all duration-300 ${
-                  faceState === FACE_STATES.LOCKED
-                    ? 'border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)] animate-pulse'
-                    : 'border-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.3)]'
-                }`}
-                style={{ display: 'none' }}
-              />
+                className="absolute inset-0 pointer-events-none select-none"
+                style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
+              >
+                {cameraOverlay}
+              </div>
               <button
                 type="button"
                 onClick={toggleFacing}
@@ -261,63 +113,26 @@ function CameraCapture({ onCapture, onClose }) {
               </button>
             </div>
 
-            {/* ══ Live instructional feedback ══ */}
-            <p className="text-center mt-3 min-h-[2rem]">
-              {faceState === FACE_STATES.LOADING && (
-                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-amber-500/15 text-amber-300">
-                  جاري تحميل نماذج الذكاء الاصطناعي...
-                </span>
-              )}
-              {faceState === FACE_STATES.SEARCHING && instruction && (
-                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-yellow-500/15 text-yellow-300">
-                  {instruction}
-                </span>
-              )}
-              {faceState === FACE_STATES.SEARCHING && !instruction && (
-                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-gray-600/30 text-gray-400">
-                  جاري البحث عن وجه
-                </span>
-              )}
-              {faceState === FACE_STATES.LOCKED && (
-                <span className="inline-block text-sm font-bold px-4 py-1.5 rounded-full bg-emerald-500/20 text-emerald-300 transition-all duration-300">
-                  {isStable
-                    ? '✅ تم التقاط الصورة'
-                    : `تطابق تام – ثبت وضعك (${stabilityTime}/${STABILITY_SECONDS} ثانية)`}
-                </span>
-              )}
+            <p className="text-center mt-3 text-sm text-blue-300/80 font-bold">
+              يرجى وضع الرأس في الإطار ثم التقاط الصورة
             </p>
 
-            {/* ══ Capture indicator ══ */}
             <div className="flex flex-col items-center mt-4">
-              <span className={`text-xs font-bold mb-2 transition-colors duration-300 ${buttonActive ? 'text-emerald-400' : 'text-gray-500'}`}>
+              <span className={`text-xs font-bold mb-2 transition-colors duration-300 ${cameraReady ? 'text-blue-400' : 'text-gray-500'}`}>
                 التقاط الصورة
               </span>
               <button
                 type="button"
-                disabled={!buttonActive}
+                disabled={!cameraReady}
+                onClick={performCapture}
                 className={`w-16 h-16 rounded-full transition-all duration-300 flex items-center justify-center ${
-                  buttonActive
-                    ? 'bg-emerald-500 hover:bg-emerald-400 shadow-lg shadow-emerald-500/40 cursor-pointer'
+                  cameraReady
+                    ? 'bg-blue-500 hover:bg-blue-400 shadow-lg shadow-blue-500/40 cursor-pointer'
                     : 'bg-gray-600/30 cursor-not-allowed'
                 }`}
               >
-                <div className={`w-12 h-12 rounded-full transition-colors ${buttonActive ? 'bg-white' : 'bg-gray-500'}`} />
+                <div className={`w-12 h-12 rounded-full transition-colors ${cameraReady ? 'bg-white' : 'bg-gray-500'}`} />
               </button>
-            </div>
-
-            {/* ══ Review section (grayed pre-capture) ══ */}
-            <div className="mt-5 text-center opacity-40 pointer-events-none">
-              <h3 className="text-sm font-bold text-gray-400 mb-3">مراجعة الصورة</h3>
-              <div className="flex justify-center gap-3">
-                <button type="button" disabled className="!px-6 py-2.5 rounded-xl text-sm font-bold bg-gray-700 text-gray-500 flex items-center gap-2 cursor-not-allowed">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
-                  تأكيد الصورة
-                </button>
-                <button type="button" disabled className="!px-6 py-2.5 rounded-xl text-sm font-bold bg-gray-700 text-gray-500 flex items-center gap-2 cursor-not-allowed">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                  إعادة التصوير
-                </button>
-              </div>
             </div>
 
             <div className="flex justify-center mt-3">
@@ -346,6 +161,23 @@ function CameraCapture({ onCapture, onClose }) {
     </div>
   );
 }
+
+const cameraOverlay = (
+  <svg viewBox="0 0 640 480" className="w-full h-full">
+    <g stroke="#60a5fa" strokeWidth="1" opacity="0.20" strokeDasharray="4 4">
+      <line x1="213.33" y1="0" x2="213.33" y2="480" />
+      <line x1="426.67" y1="0" x2="426.67" y2="480" />
+      <line x1="0" y1="120" x2="640" y2="120" />
+      <line x1="0" y1="240" x2="640" y2="240" />
+      <line x1="0" y1="360" x2="640" y2="360" />
+    </g>
+    <g stroke="#60a5fa" strokeWidth="2" fill="none" opacity="0.30" strokeLinecap="round">
+      <ellipse cx="320" cy="165" rx="84" ry="106" strokeDasharray="6 4" />
+      <path d="M 186 318 C 186 348 166 378 100 408 L 100 480" />
+      <path d="M 454 318 C 454 348 474 378 540 408 L 540 480" />
+    </g>
+  </svg>
+);
 
 function CountryPhoneRow({ label, required, country, digits, onCountryChange, onDigitsChange, error, showOptional }) {
   const selected = COUNTRIES.find((c) => c.code === country) || COUNTRIES[0];
