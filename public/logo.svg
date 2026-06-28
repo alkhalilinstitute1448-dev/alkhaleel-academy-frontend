@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <circle cx="100" cy="100" r="90" fill="#1a6beb" opacity="0.1"/>
+  <path d="M100 30 L170 70 L170 130 L100 170 L30 130 L30 70 Z" fill="none" stroke="#1a6beb" stroke-width="4"/>
+  <path d="M100 50 L155 80 L155 120 L100 150 L45 120 L45 80 Z" fill="none" stroke="#1a6beb" stroke-width="3" opacity="0.6"/>
+  <text x="100" y="135" text-anchor="middle" font-family="Arial" font-weight="bold" font-size="22" fill="#1a6beb">الخليل</text>
+</svg>
