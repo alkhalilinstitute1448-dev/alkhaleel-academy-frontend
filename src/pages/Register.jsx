@@ -27,16 +27,63 @@ const initialForm = {
   birthYear: '', stage: '',
 };
 
+const FACE_OVERLAY = (
+  <svg viewBox="0 0 640 480" className="absolute inset-0 w-full h-full pointer-events-none" style={{ transform: 'scaleX(-1)' }}>
+    <defs>
+      <filter id="neonGlow">
+        <feGaussianBlur stdDeviation="3" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#neonGlow)" stroke="#00ffcc" strokeWidth="2" fill="none" opacity="0.7">
+      <ellipse cx="320" cy="165" rx="100" ry="130" />
+      <ellipse cx="320" cy="165" rx="100" ry="130" strokeWidth="1" strokeDasharray="6 4" opacity="0.35" />
+      <line x1="250" y1="145" x2="270" y2="145" strokeWidth="2.5" strokeLinecap="round" />
+      <line x1="370" y1="145" x2="390" y2="145" strokeWidth="2.5" strokeLinecap="round" />
+      <line x1="320" y1="160" x2="320" y2="190" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
+      <path d="M290 210 Q320 225 350 210" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.7" />
+      <path d="M270 290 Q320 340 370 290" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.6" />
+    </g>
+  </svg>
+);
+
+const STABILITY_SECONDS = 18;
+
 function CameraCapture({ onCapture, onClose }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [facing, setFacing] = useState('user');
   const [captured, setCaptured] = useState(null);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [stabilityTime, setStabilityTime] = useState(0);
+  const stabilityInterval = useRef(null);
+  const isStable = stabilityTime >= STABILITY_SECONDS;
 
   useEffect(() => {
+    setCameraReady(false);
+    setStabilityTime(0);
     startCamera(facing);
     return () => stopCamera();
-  }, []);
+  }, [facing]);
+
+  useEffect(() => {
+    if (!cameraReady || captured) return;
+    stabilityInterval.current = setInterval(() => {
+      setStabilityTime((prev) => {
+        if (prev >= STABILITY_SECONDS - 1) {
+          clearInterval(stabilityInterval.current);
+          return STABILITY_SECONDS;
+        }
+        return prev + 1;
+      });
+    }, 1000);
+    return () => {
+      if (stabilityInterval.current) clearInterval(stabilityInterval.current);
+    };
+  }, [cameraReady, captured]);
 
   function startCamera(f) {
     stopCamera();
@@ -44,6 +91,7 @@ function CameraCapture({ onCapture, onClose }) {
       .then((s) => {
         streamRef.current = s;
         if (videoRef.current) videoRef.current.srcObject = s;
+        setCameraReady(true);
       })
       .catch(() => {});
   }
@@ -56,6 +104,7 @@ function CameraCapture({ onCapture, onClose }) {
   }
 
   function capture() {
+    if (!isStable) return;
     const v = videoRef.current;
     if (!v) return;
     const c = document.createElement('canvas');
@@ -70,6 +119,8 @@ function CameraCapture({ onCapture, onClose }) {
 
   function retake() {
     setCaptured(null);
+    setStabilityTime(0);
+    setCameraReady(false);
     startCamera(facing);
   }
 
@@ -80,31 +131,71 @@ function CameraCapture({ onCapture, onClose }) {
     onClose();
   }
 
+  function toggleFacing() {
+    setFacing((f) => (f === 'user' ? 'environment' : 'user'));
+  }
+
   return (
     <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
       <div className="relative w-full max-w-md">
         {!captured ? (
           <>
-            <video ref={videoRef} autoPlay playsInline className="w-full rounded-2xl bg-black mirror" style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }} />
-            <div className="flex justify-center gap-4 mt-4">
-              <button type="button" onClick={() => setFacing((f) => f === 'user' ? 'environment' : 'user')} className="btn-secondary !px-5">
-                <svg className="w-5 h-5 inline ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <p className="text-center text-sm text-cyan-300 mb-3 font-medium leading-relaxed">
+              ضع وجهك في وسط الإطار وحافظ على ثبات الوضع
+              <br />ثم اضغط على زر الالتقاط عندما يصبح باللون الأخضر
+            </p>
+            <div className="relative rounded-2xl overflow-hidden bg-black">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full aspect-[4/3] object-cover"
+                style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
+              />
+              {FACE_OVERLAY}
+              <button
+                type="button"
+                onClick={toggleFacing}
+                className="absolute bottom-3 left-3 w-11 h-11 rounded-full bg-black/60 border border-white/20 flex items-center justify-center hover:bg-black/80 transition-colors z-10"
+              >
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
-                تبديل الكاميرا
               </button>
-              <button type="button" onClick={capture} className="w-16 h-16 rounded-full bg-white/20 hover:bg-white/30 border-4 border-white transition-all flex items-center justify-center">
-                <div className="w-12 h-12 rounded-full bg-white" />
+            </div>
+            <div className="mt-3 text-center">
+              <span className={`inline-block text-sm font-bold px-4 py-1.5 rounded-full transition-all duration-300 ${isStable ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                {isStable
+                  ? '✅ ممتاز – تم تثبيت الوضع'
+                  : `🟡 ممتاز – ثبت الوضع (${stabilityTime}/${STABILITY_SECONDS} ثانية)`}
+              </span>
+            </div>
+            <div className="flex justify-center gap-5 mt-4">
+              <button type="button" onClick={capture} disabled={!isStable} className={`w-16 h-16 rounded-full transition-all duration-300 flex items-center justify-center ${isStable ? 'bg-emerald-500 hover:bg-emerald-400 shadow-lg shadow-emerald-500/40 cursor-pointer' : 'bg-gray-600/50 cursor-not-allowed'}`}>
+                <div className={`w-12 h-12 rounded-full transition-colors ${isStable ? 'bg-white' : 'bg-gray-400'}`} />
               </button>
-              <button type="button" onClick={onClose} className="btn-secondary !px-5">إلغاء</button>
+              <button type="button" onClick={onClose} className="btn-secondary !px-5 self-center">إلغاء</button>
             </div>
           </>
         ) : (
           <>
             <img src={captured} alt="ملتقطة" className="w-full rounded-2xl border-2 border-gold-500/30" />
-            <div className="flex justify-center gap-4 mt-4">
-              <button type="button" onClick={confirm} className="btn-primary !px-6">تأكيد الصورة</button>
-              <button type="button" onClick={retake} className="btn-secondary !px-6">إعادة التصوير</button>
+            <div className="mt-4 text-center">
+              <h3 className="text-sm font-bold text-gold-400 mb-3">مراجعة الصورة</h3>
+              <div className="flex justify-center gap-3">
+                <button type="button" onClick={confirm} className="btn-primary !px-6 flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                  تأكيد الصورة
+                </button>
+                <button type="button" onClick={retake} className="btn-secondary !px-6 flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  إعادة التصوير
+                </button>
+              </div>
             </div>
           </>
         )}
